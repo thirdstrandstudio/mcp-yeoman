@@ -5,6 +5,7 @@ import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js"
 import {
     CallToolRequestSchema,
     ListToolsRequestSchema,
+    LoggingMessageNotification,
 } from "@modelcontextprotocol/sdk/types.js";
 import { z } from 'zod';
 import { zodToJsonSchema } from 'zod-to-json-schema';
@@ -21,6 +22,9 @@ const SearchYeomanTemplatesArgumentsSchema = z.object({
     pageSize: z.number().default(20).describe("The number of templates to return (default 20)")
 });
 
+const GetGeneratorOptionsArgumentsSchema = z.object({
+    generatorName: z.string().describe("The name of the Yeoman generator to get options for (without the 'generator-' prefix)")
+});
 
 const RunYeomanGeneratorArgumentsSchema = z.object({
     generatorName: z.string().describe("The name of the Yeoman generator to run (without the 'generator-' prefix)"),
@@ -58,6 +62,13 @@ const server = new Server(
     }
 );
 
+const sendLogMessage = (message: string, level: LoggingMessageNotification["params"]["level"] = "info") => {
+    console.log({
+        message: message,
+        level: level
+    })
+}
+
 // Define an interface for the .yo-rc.json file structure
 interface YoRC {
     [key: string]: Record<string, any>;
@@ -68,7 +79,7 @@ async function searchYeomanTemplates(query: string, pageSize: number) {
         // Search npm registry for packages with 'yeoman-generator' keyword and your query
         const response = await axios.get('https://registry.npmjs.org/-/v1/search', {
             params: {
-                text: `keywords:yeoman-generator,${query}`,
+                text: `keywords:yeoman-generator,${query.split(' ').join(',')}`,
                 size: pageSize
             }
         });
@@ -93,7 +104,7 @@ async function searchYeomanTemplates(query: string, pageSize: number) {
             license: item.package.license
         }));
     } catch (error) {
-        console.error('Error searching for Yeoman templates:', error);
+        sendLogMessage(`Error searching for Yeoman templates: ${error}`, "error");
         throw error;
     }
 }
@@ -107,7 +118,7 @@ async function cleanup(tempDir: string) {
     try {
         await fs.rm(tempDir, { recursive: true, force: true });
     } catch (error) {
-        console.error('Error cleaning up temporary directory:', error);
+        sendLogMessage(`Error cleaning up temporary directory: ${error}`, "error");
     }
 }
 
@@ -132,7 +143,7 @@ async function getGeneratorHelp(generatorName: string, nodeModulesPath: string, 
         });
 
         helpProcess.stderr.on('data', (data) => {
-            console.error(`Error from help command: ${data}`);
+            sendLogMessage(`Error from help command: ${data}`, "error");
         });
 
         helpProcess.on('close', (code) => {
@@ -403,13 +414,13 @@ async function runYeomanGenerator(generatorName: string, options: any = {}, cwd:
         }
 
         // Install yo and the generator if not already installed
-        console.log(`Installing yo and generator-${generatorName}...`);
+        sendLogMessage(`Installing yo and generator-${generatorName}...`);
 
         try {
             await execa('npm', ['install', 'yo', `generator-${generatorName}`], { cwd: tempDir });
-            console.log(`Successfully installed yo and generator-${generatorName}`);
+            sendLogMessage(`Successfully installed yo and generator-${generatorName}`);
         } catch (installError: any) {
-            console.error(`Error installing generator: ${installError.message}`);
+            sendLogMessage(`Error installing generator: ${installError.message}`, "error");
             return {
                 success: false,
                 error: `Failed to install generator-${generatorName}: ${installError.message}`,
@@ -492,7 +503,7 @@ async function runYeomanGenerator(generatorName: string, options: any = {}, cwd:
             }
 
         } catch (helpError: any) {
-            console.error(`Error getting generator help: ${helpError.message}`);
+            sendLogMessage(`Error getting generator help: ${helpError.message}`, "error");
             // We'll continue without help information - the generator might still work
         }
 
@@ -512,10 +523,10 @@ async function runYeomanGenerator(generatorName: string, options: any = {}, cwd:
         }
 
         // Log the options that will be used
-        console.log('Using options:', options);
+        sendLogMessage('Using options:', options);
 
         // Run the generator with the provided options and arguments
-        console.log(`Running generator-${generatorName}...`);
+        sendLogMessage(`Running generator-${generatorName}...`);
 
         // Create the command parts - add force-non-interactive flags
         const yoPath = path.join(nodeModulesPath, 'yo', 'lib', 'cli.js');
@@ -586,7 +597,7 @@ async function runYeomanGenerator(generatorName: string, options: any = {}, cwd:
                     yoProcess.stderr.on('data', (data: Buffer) => {
                         const chunk = data.toString();
                         output += chunk;
-                        console.error(chunk);
+                        sendLogMessage(chunk, "error");
                     });
                 }
 
@@ -596,7 +607,7 @@ async function runYeomanGenerator(generatorName: string, options: any = {}, cwd:
                         try {
                             fsSync.closeSync(nullInput);
                         } catch (error) {
-                            console.warn('Error closing null device:', error);
+                            sendLogMessage(`Error closing null device: ${error}`, "error");
                         }
                     }
 
@@ -616,7 +627,7 @@ async function runYeomanGenerator(generatorName: string, options: any = {}, cwd:
                         try {
                             fsSync.closeSync(nullInput);
                         } catch (closeError) {
-                            console.warn('Error closing null device:', closeError);
+                            sendLogMessage(`Error closing null device: ${closeError}`, "error");
                         }
                     }
                     reject(error);
@@ -690,7 +701,7 @@ async function runYeomanGenerator(generatorName: string, options: any = {}, cwd:
                     const generatorKey = getGeneratorKey(generatorName);
                     generatorConfigExists = !!yoRc[generatorKey];
                 } catch (e) {
-                    console.error('Error reading .yo-rc.json:', e);
+                    sendLogMessage(`Error reading .yo-rc.json: ${e}`, "error");
                 }
             }
 
@@ -703,8 +714,7 @@ async function runYeomanGenerator(generatorName: string, options: any = {}, cwd:
             };
 
         } catch (runError: any) {
-            console.error(runError);
-            console.error(`Error running generator: ${runError.message}`);
+            sendLogMessage(`Error running generator: ${runError.message}`, "error");
             return {
                 success: false,
                 error: `Failed to run generator: ${runError.message}`,
@@ -712,7 +722,7 @@ async function runYeomanGenerator(generatorName: string, options: any = {}, cwd:
         }
 
     } catch (error: any) {
-        console.error(`Unexpected error: ${error.message}`);
+        sendLogMessage(`Unexpected error: ${error.message}`, "error");
         return {
             success: false,
             error: `Unexpected error: ${error.message}`
@@ -749,6 +759,123 @@ function cleanOutput(output: string): string {
         .replace(/\n{3,}/g, '\n\n');      // Collapse multiple newlines
 }
 
+// Add this function to get generator options and arguments
+async function getGeneratorOptions(generatorName: string) {
+    // Create a temporary directory for setup work
+    const tempDir = await createTempDir();
+    let nodeModulesPath = '';
+
+    try {
+        // Create a package.json file in the temp directory if it doesn't exist
+        const packageJsonPath = path.join(tempDir, 'package.json');
+        if (!fsSync.existsSync(packageJsonPath)) {
+            await fs.writeFile(packageJsonPath, JSON.stringify({
+                name: 'yeoman-temp',
+                version: '1.0.0',
+                private: true
+            }));
+        }
+
+        // Install yo and the generator if not already installed
+        sendLogMessage(`Installing yo and generator-${generatorName}...`);
+
+        try {
+            await execa('npm', ['install', 'yo', `generator-${generatorName}`], { cwd: tempDir });
+            sendLogMessage(`Successfully installed yo and generator-${generatorName}`);
+        } catch (installError: any) {
+            sendLogMessage(`Error installing generator: ${installError.message}`, "error");
+            return {
+                success: false,
+                error: `Failed to install generator-${generatorName}: ${installError.message}`,
+                suggestions: [`Make sure generator-${generatorName} exists on npm`]
+            };
+        }
+
+        nodeModulesPath = path.join(tempDir, 'node_modules');
+
+        // Create a custom environment with updated PATH to find the installed modules
+        const PATH_ENV_VAR = process.platform === 'win32' ? 'Path' : 'PATH';
+        const customEnv = {
+            ...process.env,
+            [PATH_ENV_VAR]: `${nodeModulesPath}/.bin${path.delimiter}${process.env[PATH_ENV_VAR]}`,
+            NODE_PATH: nodeModulesPath
+        };
+
+        // Get help information about the generator
+        let helpOutput = '';
+
+        try {
+            helpOutput = await getGeneratorHelp(generatorName, nodeModulesPath, tempDir, customEnv);
+            const helpInfo = parseGeneratorHelp(helpOutput);
+            
+            // Format options and arguments in a more descriptive way
+            const formattedArgs = helpInfo.args.map(arg => ({
+                name: arg.name,
+                type: arg.type,
+                required: arg.required,
+                description: arg.description
+            }));
+            
+            const formattedOptions = helpInfo.options.map(opt => {
+                const enumValues = extractEnumValues(opt.description);
+                return {
+                    name: opt.name,
+                    flag: opt.flag,
+                    description: opt.description,
+                    default: opt.default,
+                    required: isOptionRequired(opt),
+                    enumValues: enumValues
+                };
+            });
+            
+            return {
+                success: true,
+                usage: extractUsageFromHelp(helpOutput),
+                args: formattedArgs,
+                options: formattedOptions,
+                suggestedCommand: generateSuggestedCommand(generatorName, formattedArgs, formattedOptions)
+            };
+        } catch (helpError: any) {
+            sendLogMessage(`Error getting generator help: ${helpError.message}`, "error");
+            return {
+                success: false,
+                error: `Failed to get generator options: ${helpError.message}`
+            };
+        }
+    } catch (error: any) {
+        sendLogMessage(`Unexpected error: ${error.message}`, "error");
+        return {
+            success: false,
+            error: `Unexpected error: ${error.message}`
+        };
+    } finally {
+        // Clean up temporary directory
+        await cleanup(tempDir);
+    }
+}
+
+// Helper function to generate a suggested command with required parameters
+function generateSuggestedCommand(
+    generatorName: string, 
+    args: Array<{name: string, required: boolean}>,
+    options: Array<{name: string, required: boolean, enumValues: string[] | null}>
+): string {
+    const requiredArgs = args
+        .filter(arg => arg.required)
+        .map(arg => `<${arg.name}>`);
+        
+    const requiredOptions = options
+        .filter(opt => opt.required)
+        .map(opt => {
+            if (opt.enumValues && opt.enumValues.length > 0) {
+                return `--${opt.name}=${opt.enumValues[0]}`;
+            }
+            return `--${opt.name}="value"`;
+        });
+        
+    return `yo ${generatorName} ${requiredArgs.join(' ')} ${requiredOptions.join(' ')}`.trim();
+}
+
 // List available tools
 server.setRequestHandler(ListToolsRequestSchema, async () => {
     return {
@@ -757,6 +884,11 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
                 name: "yeoman_search_templates",
                 description: "Search for Yeoman templates",
                 inputSchema: convertZodToJsonSchema(SearchYeomanTemplatesArgumentsSchema),
+            },
+            {
+                name: "yeoman_get_generator_options",
+                description: "Get the required options and arguments for a Yeoman generator",
+                inputSchema: convertZodToJsonSchema(GetGeneratorOptionsArgumentsSchema),
             },
             {
                 name: "yeoman_generate",
@@ -777,6 +909,11 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
                 const { query, pageSize } = SearchYeomanTemplatesArgumentsSchema.parse(args);
                 const templates = await searchYeomanTemplates(query, pageSize);
                 return responseToString(templates);
+
+            case "yeoman_get_generator_options":
+                const { generatorName: genName } = GetGeneratorOptionsArgumentsSchema.parse(args);
+                const generatorOptions = await getGeneratorOptions(genName);
+                return responseToString(generatorOptions);
 
             case "yeoman_generate":
                 const {
@@ -818,7 +955,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
                     const result = await runYeomanGenerator(generatorName, mergedOptions, cwd, allPositionalArgs);
                     return responseToString(result);
                 } catch (error: any) {
-                    console.error("Error running generator:", error);
+                    sendLogMessage(`Error running generator: ${error}`);
                     throw error;
                 }
 
@@ -836,7 +973,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
 
         // Add detailed error logging
         const err = error as any;
-        console.error("Error details:", {
+        sendLogMessage(`Error details: ${JSON.stringify({
             message: err.message,
             stack: err.stack,
             response: err.response?.data || null,
@@ -844,7 +981,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
             headers: err.response?.headers || null,
             name: err.name,
             fullError: JSON.stringify(err, Object.getOwnPropertyNames(err), 2)
-        });
+        })}`, "error");
 
         throw new Error(`Error executing tool ${name}: ${err.message}${err.response?.data ? ` - Response: ${JSON.stringify(err.response.data)}` : ''}`);
     }
@@ -858,12 +995,12 @@ async function main() {
         await server.connect(transport);
         console.log("MCP Yeoman Server running on stdio");
     } catch (error) {
-        console.log("Error during startup:", error);
+        console.error(`Error during startup: ${error}`);
         process.exit(1);
     }
 }
 
 main().catch((error) => {
-    console.log("Fatal error in main():", error);
+    console.error(`Fatal error in main(): ${error}`);
     process.exit(1);
 });
