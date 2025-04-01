@@ -6,6 +6,10 @@
 
 A Model Context Protocol (MCP) server that provides integration with Yeoman generators, allowing AI agents to search for and run Yeoman templates programmatically.
 
+
+<img width="832" alt="Cursor_CIuNzjl6ca" src="https://github.com/user-attachments/assets/d062eb45-320e-4f4a-8bfa-121bb522b8b7" />
+
+
 ## Tools
 
 This server implements the following MCP tools:
