@@ -17,6 +17,31 @@ import * as fsSync from 'fs';
 import os from 'os';
 import { spawn } from 'child_process';
 
+// Add configuration for persistent generator directory from command line args
+let persistentGeneratorDir: string | null = null;
+
+// Parse command line arguments
+function parseCommandLineArgs() {
+    const args = process.argv.slice(2);
+    for (let i = 0; i < args.length; i++) {
+        if (args[i] === "--generator-dir" && i + 1 < args.length) {
+            persistentGeneratorDir = args[i + 1];
+            i++; // Skip the next argument as it's the value
+        }
+    }
+
+    if (persistentGeneratorDir) {
+        console.log(`Using persistent generator directory: ${persistentGeneratorDir}`);
+        // Ensure the directory exists
+        try {
+            fsSync.mkdirSync(persistentGeneratorDir, { recursive: true });
+        } catch (error) {
+            console.error(`Failed to create generator directory: ${error}`);
+            persistentGeneratorDir = null;
+        }
+    }
+}
+
 const SearchYeomanTemplatesArgumentsSchema = z.object({
     query: z.string().describe("The query to search for seperate with commas if multiple keywords .e.g. react,typescript,tailwind"),
     pageSize: z.number().default(20).describe("The number of templates to return (default 20)")
@@ -109,12 +134,29 @@ async function searchYeomanTemplates(query: string, pageSize: number) {
     }
 }
 
+// Function to get generator directory
+async function getGeneratorDir(): Promise<string> {
+    // If we have a persistent directory configured, use it
+    if (persistentGeneratorDir) {
+        return persistentGeneratorDir;
+    }
+    
+    // Otherwise create a temp directory
+    const tempDir = await createTempDir();
+    return tempDir;
+}
+
 async function createTempDir() {
     const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), 'yeoman-'));
     return tempDir;
 }
 
 async function cleanup(tempDir: string) {
+    // Only clean up if it's a temporary directory, not our persistent one
+    if (persistentGeneratorDir && tempDir === persistentGeneratorDir) {
+        return;
+    }
+    
     try {
         await fs.rm(tempDir, { recursive: true, force: true });
     } catch (error) {
@@ -393,18 +435,18 @@ function checkRequiredArguments(
 }
 
 
-// Simplified version of runYeomanGenerator that gets help first and runs non-interactively
+// Update runYeomanGenerator to use persistent directory
 async function runYeomanGenerator(generatorName: string, options: any = {}, cwd: string, args: string[] = []) {
-    // Create a temporary directory for setup work
-    const tempDir = await createTempDir();
-    let nodeModulesPath = '';
+    // Get or create directory for generators
+    const genDir = await getGeneratorDir();
+    const shouldCleanup = !persistentGeneratorDir || genDir !== persistentGeneratorDir;
 
     try {
         // Ensure the target directory exists
         await fs.mkdir(cwd, { recursive: true });
 
-        // Create a package.json file in the temp directory if it doesn't exist
-        const packageJsonPath = path.join(tempDir, 'package.json');
+        // Create a package.json file in the generator directory if it doesn't exist
+        const packageJsonPath = path.join(genDir, 'package.json');
         if (!fsSync.existsSync(packageJsonPath)) {
             await fs.writeFile(packageJsonPath, JSON.stringify({
                 name: 'yeoman-temp',
@@ -413,22 +455,30 @@ async function runYeomanGenerator(generatorName: string, options: any = {}, cwd:
             }));
         }
 
-        // Install yo and the generator if not already installed
-        sendLogMessage(`Installing yo and generator-${generatorName}...`);
+        // Check if generator is already installed
+        const generatorPath = path.join(genDir, 'node_modules', `generator-${generatorName}`);
+        const yoPath = path.join(genDir, 'node_modules', 'yo');
+        const needsInstall = !fsSync.existsSync(generatorPath) || !fsSync.existsSync(yoPath);
 
-        try {
-            await execa('npm', ['install', 'yo', `generator-${generatorName}`], { cwd: tempDir });
-            sendLogMessage(`Successfully installed yo and generator-${generatorName}`);
-        } catch (installError: any) {
-            sendLogMessage(`Error installing generator: ${installError.message}`, "error");
-            return {
-                success: false,
-                error: `Failed to install generator-${generatorName}: ${installError.message}`,
-                suggestions: [`Make sure generator-${generatorName} exists on npm`]
-            };
+        // Only install generators if they're not already installed
+        if (needsInstall) {
+            sendLogMessage(`Installing yo and generator-${generatorName}...`);
+            try {
+                await execa('npm', ['install', 'yo', `generator-${generatorName}`], { cwd: genDir });
+                sendLogMessage(`Successfully installed yo and generator-${generatorName}`);
+            } catch (installError: any) {
+                sendLogMessage(`Error installing generator: ${installError.message}`, "error");
+                return {
+                    success: false,
+                    error: `Failed to install generator-${generatorName}: ${installError.message}`,
+                    suggestions: [`Make sure generator-${generatorName} exists on npm`]
+                };
+            }
+        } else {
+            sendLogMessage(`Using previously installed generator-${generatorName}`);
         }
 
-        nodeModulesPath = path.join(tempDir, 'node_modules');
+        const nodeModulesPath = path.join(genDir, 'node_modules');
 
         // Create a custom environment with updated PATH to find the installed modules
         const PATH_ENV_VAR = process.platform === 'win32' ? 'Path' : 'PATH';
@@ -451,7 +501,7 @@ async function runYeomanGenerator(generatorName: string, options: any = {}, cwd:
         let helpOutput = '';
 
         try {
-            const helpOutputResult = await getGeneratorHelp(generatorName, nodeModulesPath, tempDir, customEnv);
+            const helpOutputResult = await getGeneratorHelp(generatorName, nodeModulesPath, genDir, customEnv);
             helpOutput = helpOutputResult;
             helpInfo = parseGeneratorHelp(helpOutput);
 
@@ -529,8 +579,8 @@ async function runYeomanGenerator(generatorName: string, options: any = {}, cwd:
         sendLogMessage(`Running generator-${generatorName}...`);
 
         // Create the command parts - add force-non-interactive flags
-        const yoPath = path.join(nodeModulesPath, 'yo', 'lib', 'cli.js');
-        const yoArgs = [yoPath, generatorName, ...args];
+        const cliYoPath = path.join(nodeModulesPath, 'yo', 'lib', 'cli.js');
+        const yoArgs = [cliYoPath, generatorName, ...args];
 
         // Add options as command line arguments
         for (const [key, value] of Object.entries(options)) {
@@ -728,8 +778,10 @@ async function runYeomanGenerator(generatorName: string, options: any = {}, cwd:
             error: `Unexpected error: ${error.message}`
         };
     } finally {
-        // Clean up temporary directory
-        await cleanup(tempDir);
+        // Only clean up if it's a temporary directory
+        if (shouldCleanup) {
+            await cleanup(genDir);
+        }
     }
 }
 
@@ -759,15 +811,15 @@ function cleanOutput(output: string): string {
         .replace(/\n{3,}/g, '\n\n');      // Collapse multiple newlines
 }
 
-// Add this function to get generator options and arguments
+// Update getGeneratorOptions to use persistent directory
 async function getGeneratorOptions(generatorName: string) {
-    // Create a temporary directory for setup work
-    const tempDir = await createTempDir();
-    let nodeModulesPath = '';
+    // Get or create directory for generators
+    const genDir = await getGeneratorDir();
+    const shouldCleanup = !persistentGeneratorDir || genDir !== persistentGeneratorDir;
 
     try {
-        // Create a package.json file in the temp directory if it doesn't exist
-        const packageJsonPath = path.join(tempDir, 'package.json');
+        // Create a package.json file in the generator directory if it doesn't exist
+        const packageJsonPath = path.join(genDir, 'package.json');
         if (!fsSync.existsSync(packageJsonPath)) {
             await fs.writeFile(packageJsonPath, JSON.stringify({
                 name: 'yeoman-temp',
@@ -776,22 +828,30 @@ async function getGeneratorOptions(generatorName: string) {
             }));
         }
 
-        // Install yo and the generator if not already installed
-        sendLogMessage(`Installing yo and generator-${generatorName}...`);
+        // Check if generator is already installed
+        const generatorPath = path.join(genDir, 'node_modules', `generator-${generatorName}`);
+        const yoPath = path.join(genDir, 'node_modules', 'yo');
+        const needsInstall = !fsSync.existsSync(generatorPath) || !fsSync.existsSync(yoPath);
 
-        try {
-            await execa('npm', ['install', 'yo', `generator-${generatorName}`], { cwd: tempDir });
-            sendLogMessage(`Successfully installed yo and generator-${generatorName}`);
-        } catch (installError: any) {
-            sendLogMessage(`Error installing generator: ${installError.message}`, "error");
-            return {
-                success: false,
-                error: `Failed to install generator-${generatorName}: ${installError.message}`,
-                suggestions: [`Make sure generator-${generatorName} exists on npm`]
-            };
+        // Only install generators if they're not already installed
+        if (needsInstall) {
+            sendLogMessage(`Installing yo and generator-${generatorName}...`);
+            try {
+                await execa('npm', ['install', 'yo', `generator-${generatorName}`], { cwd: genDir });
+                sendLogMessage(`Successfully installed yo and generator-${generatorName}`);
+            } catch (installError: any) {
+                sendLogMessage(`Error installing generator: ${installError.message}`, "error");
+                return {
+                    success: false,
+                    error: `Failed to install generator-${generatorName}: ${installError.message}`,
+                    suggestions: [`Make sure generator-${generatorName} exists on npm`]
+                };
+            }
+        } else {
+            sendLogMessage(`Using previously installed generator-${generatorName}`);
         }
 
-        nodeModulesPath = path.join(tempDir, 'node_modules');
+        const nodeModulesPath = path.join(genDir, 'node_modules');
 
         // Create a custom environment with updated PATH to find the installed modules
         const PATH_ENV_VAR = process.platform === 'win32' ? 'Path' : 'PATH';
@@ -805,7 +865,7 @@ async function getGeneratorOptions(generatorName: string) {
         let helpOutput = '';
 
         try {
-            helpOutput = await getGeneratorHelp(generatorName, nodeModulesPath, tempDir, customEnv);
+            helpOutput = await getGeneratorHelp(generatorName, nodeModulesPath, genDir, customEnv);
             const helpInfo = parseGeneratorHelp(helpOutput);
             
             // Format options and arguments in a more descriptive way
@@ -849,8 +909,10 @@ async function getGeneratorOptions(generatorName: string) {
             error: `Unexpected error: ${error.message}`
         };
     } finally {
-        // Clean up temporary directory
-        await cleanup(tempDir);
+        // Only clean up if it's a temporary directory
+        if (shouldCleanup) {
+            await cleanup(genDir);
+        }
     }
 }
 
@@ -987,9 +1049,12 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
     }
 });
 
-// Start the server
+// Update main function to parse command line args
 async function main() {
     try {
+        // Parse command line arguments before starting the server
+        parseCommandLineArgs();
+        
         console.log("Starting MCP Yeoman Server...");
         const transport = new StdioServerTransport();
         await server.connect(transport);
