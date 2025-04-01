@@ -1,4 +1,8 @@
-# MCP Yeoman Server [![smithery badge](https://smithery.ai/badge/mcp-yeoman)](https://smithery.ai/server/mcp-yeoman)
+# MCP Yeoman Server 
+
+[![Third Strand Studio](https://img.shields.io/badge/Third%20Strand%20Studio-Visit%20Us-blue)](https://thirdstrandstudio.com) 
+
+[![smithery badge](https://smithery.ai/badge/@thirdstrandstudio/mcp-yeoman)](https://smithery.ai/server/@thirdstrandstudio/mcp-yeoman)
 
 A Model Context Protocol (MCP) server that provides integration with Yeoman generators, allowing AI agents to search for and run Yeoman templates programmatically.
 
@@ -13,11 +17,18 @@ This server implements the following MCP tools:
      - `pageSize` (number, optional): Number of results to return (default: 20)
 
 ### Generator Methods
-2. `yeoman_generate` - Run a Yeoman generator
+2. `yeoman_get_generator_options` - Get the required options and arguments for a Yeoman generator
    - Parameters:
      - `generatorName` (string): Name of the generator (without 'generator-' prefix)
-     - `options` (object, optional): Options to pass to the generator
+
+3. `yeoman_generate` - Run a Yeoman generator
+   - Parameters:
+     - `generatorName` (string): Name of the generator (without 'generator-' prefix)
      - `cwd` (string): Working directory where the generator should run
+     - `appName` (string): The name of the application to create
+     - `version` (string): The version of the application to create
+     - `options` (object, optional): Options to pass to the generator
+     - `args` (array, optional): Additional positional arguments to pass to the generator
 
 ## Installation
 
@@ -31,12 +42,11 @@ npx @smithery/cli@latest install mcp-yeoman --client claude
 ### Prerequisites
 - Node.js (v16 or later)
 - npm or yarn
-- Yeoman environment
 
 ### Installing the package
 ```bash
 # Clone the repository
-git clone https://github.com/your-username/mcp-yeoman.git
+git clone https://github.com/thirdstrandstudio/mcp-yeoman.git
 cd mcp-yeoman
 
 # Install dependencies
@@ -56,7 +66,7 @@ Add the following to your `claude_desktop_config.json`:
   "mcpServers": {
     "yeoman": {
       "command": "npx",
-      "args": ["mcp-yeoman"]
+      "args": ["@thirdstrandstudio/mcp-yeoman"]
     }
   }
 }
@@ -76,6 +86,24 @@ Add the following to your `claude_desktop_config.json`:
 
 Replace `/path/to/mcp-yeoman` with the actual path to your repository.
 
+## Command-line Arguments
+
+The server supports the following command-line arguments:
+
+- `--generator-dir <path>`: Specify a persistent directory for installing Yeoman generators. By default, generators are installed in a temporary directory that is removed when the operation completes. Using a persistent directory can improve performance for repeated operations with the same generators.
+
+Example:
+```json
+{
+  "mcpServers": {
+    "yeoman": {
+      "command": "node",
+      "args": ["/path/to/mcp-yeoman/dist/index.js", "--generator-dir", "/path/to/generator-storage"]
+    }
+  }
+}
+```
+
 ## Examples
 
 ### Search for Templates
@@ -87,16 +115,26 @@ const templates = await callTool("yeoman_search_templates", {
 });
 ```
 
+### Get Generator Options
+```javascript
+// Get options for the React generator
+const options = await callTool("yeoman_get_generator_options", {
+  generatorName: "react"
+});
+```
+
 ### Run a Generator
 ```javascript
 // Run the React generator
 const result = await callTool("yeoman_generate", {
   generatorName: "react",
+  cwd: "/path/to/project",
+  appName: "my-react-app",
+  version: "1.0.0",
   options: {
     typescript: true,
     sass: true
-  },
-  cwd: "/path/to/project"
+  }
 });
 ```
 
@@ -117,8 +155,9 @@ npm run build
 
 The server includes comprehensive error handling:
 - Validation errors for invalid parameters
+- Interactive prompt detection and guidance for required options
 - Detailed error logging for debugging
-- Automatic cleanup of temporary directories
+- Automatic cleanup of temporary directories (unless using --generator-dir)
 - Safe error propagation through MCP protocol
 
 ## License
