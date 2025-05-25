@@ -10,7 +10,7 @@ import {
 import { z } from 'zod';
 import { zodToJsonSchema } from 'zod-to-json-schema';
 import axios from 'axios';
-import execa from 'execa';
+import * as execa from 'execa';
 import path from 'path';
 import fs from 'fs/promises';
 import * as fsSync from 'fs';
